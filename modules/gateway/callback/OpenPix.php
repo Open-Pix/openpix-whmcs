@@ -7,9 +7,24 @@ require_once '../../../includes/invoicefunctions.php';
 $gatewayModuleName = 'openpix';
 $gatewayParams = getGatewayVariables($gatewayModuleName);
 
+// Verifica se o módulo de gateway está ativo
 if (!$gatewayParams['type']) {
-    error_log("Erro: M¨®dulo de gateway inativo.");
-    die("M¨®dulo de gateway inativo");
+    error_log("Erro: Módulo de gateway inativo.");
+    die("Módulo de gateway inativo");
+}
+
+// Recupera o valor da apiKey configurada no openpix_config
+$expectedApiKey = $gatewayParams['apiKey'];
+
+// Verifica a presença do header Authorization no webhook
+$headers = getallheaders(); // Obtém todos os cabeçalhos enviados no webhook
+
+// Recupera a API Key do cabeçalho
+$receivedApiKey = $headers['X-Openpix-Authorization'] ?? '';
+
+if ($receivedApiKey !== $expectedApiKey) {
+    error_log("Erro: Webhook recebido com chave API inválida. Chave esperada: {$expectedApiKey}, chave recebida: {$receivedApiKey}");
+    die("Unauthorized");
 }
 
 // Recebe o JSON de entrada e decodifica
@@ -21,10 +36,29 @@ if (json_last_error() !== JSON_ERROR_NONE) {
 
 error_log("Dados recebidos no webhook: " . print_r($input, true));
 
-// Verifica se todos os campos necess¨¢rios est0Š0o presentes
-if (!isset($input['charge']['correlationID'], $input['charge']['transactionID'], $input['charge']['value'], $input['charge']['status'])) {
-    error_log("Erro: Dados incompletos no webhook - Dados recebidos: " . print_r($input, true));
-    die("Dados incompletos recebidos.");
+if ($input['event'] === 'OPENPIX:CHARGE_EXPIRED') {
+    $invoiceId = $input['charge']['correlationID']; // ID da fatura
+
+    // Verifica o status da fatura diretamente no banco de dados
+    $result = select_query('tblinvoices', 'status', ['id' => $invoiceId]);
+    $data = mysql_fetch_assoc($result);
+
+    if ($data && strtolower($data['status']) === 'paid') {
+        error_log("A fatura ID {$invoiceId} já está paga. Nenhuma ação será realizada.");
+        die("Fatura já paga.");
+    }
+
+    // Atualiza o status da fatura para "Cancelled" no banco de dados
+    update_query('tblinvoices', ['status' => 'Cancelled'], ['id' => $invoiceId]);
+    
+    // Dispara o hook InvoiceCancelled
+    run_hook('InvoiceCancelled', [
+        'invoiceid' => $invoiceId
+    ]);
+
+    logTransaction($gatewayModuleName, $input, 'Fatura cancelada por expiração do pagamento.');
+    error_log("Fatura ID {$invoiceId} cancelada devido ao evento OPENPIX:CHARGE_EXPIRED.");
+    die("Fatura cancelada com sucesso.");
 }
 
 $invoiceId = $input['charge']['correlationID'];
@@ -35,7 +69,7 @@ $paymentStatus = $input['charge']['status'];
 error_log("Processando webhook - Invoice ID: $invoiceId, Transaction ID: $transactionId, Amount Paid: $amountPaid, Status: $paymentStatus");
 
 // Processa o pagamento com base no status
-if ($paymentStatus === 'COMPLETED') {
+if ($input['event'] === 'OPENPIX:CHARGE_COMPLETED') {
     addInvoicePayment($invoiceId, $transactionId, $amountPaid, 0, $gatewayModuleName);
     logTransaction($gatewayModuleName, $input, 'Pagamento confirmado');
     error_log("Pagamento confirmado para fatura ID: {$invoiceId}.");
