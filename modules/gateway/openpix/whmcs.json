@@ -1,0 +1,24 @@
+{
+  "schema": "1.0",
+  "type": "whmcs-gateways",
+  "name": "openpix",
+  "license": "proprietary",
+  "category": "payments",
+  "description": {
+    "name": "OpenPix",
+    "tagline": "Aceite pagamentos via OpenPix utilizando integração com WHMCS."
+  },
+  "logo": {
+    "filename": "logo.png"
+  },
+  "support": {
+    "homepage": "https://openpix.com.br/",
+    "docs_url": "https://developers.openpix.com.br/"
+  },
+  "authors": [
+    {
+      "name": "Hostbraza",
+      "homepage": "https://hostbraza.com.br/"
+    }
+  ]
+}
