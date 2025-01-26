@@ -23,47 +23,63 @@ function pix_MetaData() {
 }
 
 function openpix_config() {
-
+    
     return [
-
+        
         "FriendlyName" => [
-
+        
             "Type" => "System",
-
+        
             "Value" => "PIX",
-
+        
         ],
-
+        
         "apiEndpoint" => [
-
+        
             "Type" => "System",
-
+        
             "Value" => "https://api.openpix.com.br/api/v1/charge",
-
+        
         ],
-
+        
         "apiKey" => [
-
+        
             "FriendlyName" => "Chave API",
-
+        
             "Type" => "password",
-
+        
             "Size" => "50",
-
+        
             "Description" => "Chave de acesso à API do PIX.",
-
+        
         ],
-
+        
         "Icon" => [
-
+        
             "Type" => "System",
-
+        
             "Value" => "openpix",
-
+        
         ],
-
+        
+        "_link" => function($params) {
+            
+            if (!defined('WHMCS')) {
+                
+                return [];
+                
+            }
+            
+            return [
+                
+                "apiKey" => $params['apiKey'] ?? null,
+                
+            ];
+            
+        }
+        
     ];
-
+    
 }
 
 function openpix_link($params) {
