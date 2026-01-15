@@ -1,80 +1,92 @@
 <?php
-
 if (!defined("WHMCS")) {
     die("Acesso restrito.");
 }
 
-use WHMCS\Database\Capsule;
+require_once __DIR__ . '/../openpix/vendor/autoload.php';
 
-/**
- * Hook para cancelar a fatura na OpenPix quando for cancelada no WHMCS
- */
-add_hook('InvoiceCancelled', 1, function ($vars) {
-    $invoiceId = $vars['invoiceid'];
-    error_log("[OpenPix] Hook 'InvoiceCancelled' acionado para a fatura #{$invoiceId}");
+use OpenPix\PhpSdk\Client;
 
-    // Buscar se a fatura realmente pertence ao gateway OpenPix
-    $invoice = Capsule::table('tblinvoices')
-        ->where('id', $invoiceId)
-        ->where('paymentmethod', 'openpix') // Garante que só faturas do OpenPix sejam processadas
-        ->first();
-
-    if (!$invoice) {
-        error_log("[OpenPix] Fatura #{$invoiceId} não pertence ao gateway OpenPix. Nenhuma ação realizada.");
-        return;
+function OpenPixHooksValidateInvoiceBelongsToGateway($invoiceId) {
+    $result = localAPI('GetInvoice', ['invoiceid' => $invoiceId]);
+    
+    if ($result['result'] !== 'success') {
+        localAPI('LogActivity', ['description' => "[OpenPix] Fatura #{$invoiceId} não encontrada. Nenhuma ação realizada."]);
+        return false;
     }
+    
+    if ($result['paymentmethod'] !== 'openpix') {
+        localAPI('LogActivity', ['description' => "[OpenPix] Fatura #{$invoiceId} não pertence ao gateway OpenPix. Nenhuma ação realizada."]);
+        return false;
+    }
+    
+    return true;
+}
 
-    // Obter os parâmetros do gateway já descriptografados pelo WHMCS
+function OpenPixHooksGetGatewayApiKey() {
     $gatewayParams = getGatewayVariables("openpix");
-
+    
     if (empty($gatewayParams['apiKey'])) {
-        error_log("[OpenPix] ERRO: Chave API não encontrada através do WHMCS.");
-        logActivity("OpenPix: Erro ao recuperar API Key.");
-        return;
+        localAPI('LogActivity', ['description' => "[OpenPix] ERRO: Chave API não encontrada através do WHMCS."]);
+        return null;
     }
-
+    
     $apiKey = $gatewayParams['apiKey'];
-    error_log("[OpenPix] Chave API obtida via getGatewayVariables (parcial): " . substr($apiKey, 0, 6) . "********");
+    localAPI('LogActivity', ['description' => "[OpenPix] Chave API obtida via getGatewayVariables (parcial): " . substr($apiKey, 0, 8) . "********"]);
+    
+    return $apiKey;
+}
 
-    // ID da cobrança na OpenPix será o próprio invoiceId
-    $apiUrl = "https://api.openpix.com.br/api/v1/charge/{$invoiceId}";
-    error_log("[OpenPix] URL de cancelamento da OpenPix: {$apiUrl}");
+function OpenPixHooksDeleteCharge($invoiceId, $apiKey) {
+    try {
+        $client = Client::create($apiKey);
+        $result = $client->charges()->delete((string) $invoiceId);
+        
+        localAPI('LogActivity', ['description' => "[OpenPix] Sucesso ao cancelar cobrança via SDK para fatura #{$invoiceId}"]);
+        localAPI('LogActivity', ['description' => "[OpenPix] Resposta do SDK: " . json_encode($result, JSON_UNESCAPED_UNICODE)]);
+        
+        return [
+            'success' => true,
+            'data' => $result
+        ];
+        
+    } catch (Exception $e) {
+        localAPI('LogActivity', ['description' => "[OpenPix] Erro no SDK ao cancelar: " . $e->getMessage()]);
+        
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
+    }
+}
 
-    // Configurar a requisição para cancelar a fatura na OpenPix
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $apiUrl);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: ' . $apiKey,
-        'Content-Type: application/json',
-    ]);
-    curl_setopt($ch, CURLOPT_VERBOSE, true); // Ativa logs detalhados
+function OpenPixHooksProcessCancelResponse($invoiceId, $result) {
+    if ($result['success']) {
+        localAPI('LogActivity', ['description' => "[OpenPix] Fatura #{$invoiceId} cancelada com sucesso na OpenPix."]);
+        return true;
+    } else {
+        localAPI('LogActivity', ['description' => "[OpenPix] ERRO: Falha ao cancelar a fatura #{$invoiceId}. Erro: " . $result['error']]);
+        return false;
+    }
+}
 
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlError = curl_error($ch);
-    curl_close($ch);
-
-    // Log detalhado da resposta da API
-    error_log("[OpenPix] Resposta da API OpenPix (HTTP {$httpCode}): " . print_r($response, true));
-
-    if ($curlError) {
-        error_log("[OpenPix] ERRO: cURL falhou - {$curlError}");
-        logActivity("OpenPix: Erro ao conectar com a API OpenPix: {$curlError}");
+function OpenPixHooksCancelInvoice($invoiceId) {
+    localAPI('LogActivity', ['description' => "[OpenPix] Hook 'InvoiceCancelled' acionado para a fatura #{$invoiceId}"]);
+    
+    if (!OpenPixHooksValidateInvoiceBelongsToGateway($invoiceId)) {
         return;
     }
-
-    // Verifica se o cancelamento foi bem-sucedido
-    if ($httpCode === 200 || $httpCode === 204) {
-        error_log("[OpenPix] Sucesso! Fatura #{$invoiceId} cancelada na OpenPix.");
-        logActivity("OpenPix: Fatura {$invoiceId} cancelada com sucesso na OpenPix.");
-    } else {
-        // Tenta decodificar a resposta para verificar a mensagem de erro
-        $responseDecoded = json_decode($response, true);
-        $errorMessage = isset($responseDecoded['error']) ? $responseDecoded['error'] : 'Erro desconhecido';
-
-        error_log("[OpenPix] ERRO: Falha ao cancelar a fatura {$invoiceId}. Resposta: " . json_encode($responseDecoded));
-        logActivity("OpenPix: Falha ao cancelar a fatura {$invoiceId}. Erro: {$errorMessage}");
+    
+    $apiKey = OpenPixHooksGetGatewayApiKey();
+    if (!$apiKey) {
+        return;
     }
+    
+    $result = OpenPixHooksDeleteCharge($invoiceId, $apiKey);
+    OpenPixHooksProcessCancelResponse($invoiceId, $result);
+}
+
+add_hook('InvoiceCancelled', 1, function ($vars) {
+    OpenPixHooksCancelInvoice($vars['invoiceid']);
 });
+?>

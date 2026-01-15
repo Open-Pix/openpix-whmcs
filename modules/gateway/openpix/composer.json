@@ -1,0 +1,15 @@
+{
+    "name": "hostbraza/openpix-qrcode",
+    "description": "QR Code generator for PIX payments",
+    "require": {
+        "chillerlan/php-qrcode": "^5.0",
+        "open-pix/php-sdk": "^1.1",
+        "guzzlehttp/guzzle": "^7.10",
+        "guzzlehttp/psr7": "^2.8"
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}
